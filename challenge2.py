@@ -1,8 +1,9 @@
-"""Weather Agent using Google ADK and LiteLLM."""
+"""Weather Agent with ADK Callbacks for Logging and Validation"""
 
+import logging
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 import warnings
 from dotenv import load_dotenv
 import requests
@@ -20,16 +21,96 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 from google.adk.agents.llm_agent import LlmAgent
-from google.adk.models.lite_llm import LiteLlm
+from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 load_dotenv()
 os.environ.pop("GOOGLE_API_KEY", None)
-os.environ["ADK_SUPPRESS_GEMINI_LITELLM_WARNINGS"] = "true"
+
+# ============================================================================
+# 1. Logging Setup (writes everything to weather_agent.log)
+# ============================================================================
+LOG_FILE = "weather_agent.log"
+
+logger = logging.getLogger("weather_agent")
+logger.setLevel(logging.INFO)
+
+# Create file handler for weather_agent.log
+file_handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
+file_formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+file_handler.setFormatter(file_formatter)
+
+# Avoid duplicate handlers on re-runs
+if not logger.handlers:
+    logger.addHandler(file_handler)
+
+# ============================================================================
+# 2. Configurable List of Blocked Keywords for Input Validation
+# ============================================================================
+BLOCKED_KEYWORDS: List[str] = ["hack", "secret", "password", "confidential", "forbidden", "override"]
 
 
+# ============================================================================
+# 3. Callback Functions (Validation & Logging)
+# ============================================================================
+def validate_and_log_user_prompt(callback_context: Any, llm_request: Any) -> Optional[LlmResponse]:
+    """Callback function to validate user input and log user prompts before sending to the model.
+
+    If any forbidden keyword is found, intercepts the request and blocks the call to the model.
+    """
+    user_prompt = ""
+    if hasattr(llm_request, "contents") and llm_request.contents:
+        for content in llm_request.contents:
+            if hasattr(content, "parts") and content.parts:
+                for part in content.parts:
+                    if getattr(part, "text", None):
+                        user_prompt += part.text + " "
+
+    user_prompt = user_prompt.strip()
+
+    # Requirement 1: Log user prompt
+    logger.info(f"USER PROMPT: {user_prompt}")
+
+    # Requirement 3: Check and validate user input against blocked keywords
+    for keyword in BLOCKED_KEYWORDS:
+        if keyword.lower() in user_prompt.lower():
+            warning_msg = f"SECURITY ALERT: Blocked keyword '{keyword}' detected in input: '{user_prompt}'"
+            logger.warning(warning_msg)
+
+            # Block request by returning early LlmResponse (prevents sending to model)
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part.from_text(
+                            text=f"[BLOCKED BY VALIDATION CALLBACK] Your request was blocked before reaching the model because it contains the forbidden keyword: '{keyword}'."
+                        )
+                    ],
+                )
+            )
+
+    return None
+
+
+def log_model_response(callback_context: Any, llm_response: Any) -> Optional[LlmResponse]:
+    """Callback function to log model responses after generation."""
+    resp_text = ""
+    if hasattr(llm_response, "content") and llm_response.content:
+        if hasattr(llm_response.content, "parts") and llm_response.content.parts:
+            for part in llm_response.content.parts:
+                if getattr(part, "text", None):
+                    resp_text += part.text
+
+    # Requirement 2: Log model response
+    logger.info(f"MODEL RESPONSE: {resp_text.strip()}")
+    return None
+
+
+# ============================================================================
+# 4. Tools (PEP 8 Compliant NWS & Google Maps Geocoding)
+# ============================================================================
 def get_weather(latitude: float, longitude: float) -> Dict[str, Any]:
     """Retrieve the current weather forecast from the National Weather Service (Keyless API).
 
@@ -99,25 +180,37 @@ def geocode_address(address: str) -> Dict[str, Any]:
         return {"error": f"Geocoding request exception: {exc}"}
 
 
-def create_weather_agent(model: str = "gemini/gemini-3.7-flash") -> LlmAgent:
-    """Create an ADK LlmAgent supporting Gemini via LiteLLM.
+# ============================================================================
+# 5. Agent Factory & Execution
+# ============================================================================
+def create_weather_agent(
+    model: str = "gemini-3.7-flash",
+    blocked_keywords: Optional[List[str]] = None,
+) -> LlmAgent:
+    """Create a native Google ADK LlmAgent configured with logging and validation callbacks.
 
     Args:
-        model: LiteLLM model identifier (e.g., 'gemini/gemini-3.7-flash').
+        model: Native Gemini model identifier (e.g., 'gemini-3.7-flash').
+        blocked_keywords: Optional list of keywords to block prior to sending to model.
 
     Returns:
         Configured LlmAgent instance.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
+    global BLOCKED_KEYWORDS
+    if blocked_keywords is not None:
+        BLOCKED_KEYWORDS = blocked_keywords
+
     return LlmAgent(
         name="weather_agent",
-        model=LiteLlm(model=model, api_key=api_key),
+        model=model,
         instruction=(
             "You are a weather assistant. When asked about weather in a US location, "
             "first call geocode_address to get latitude and longitude, then call "
             "get_weather with those coordinates to get the forecast, and provide a clear summary."
         ),
         tools=[geocode_address, get_weather],
+        before_model_callback=validate_and_log_user_prompt,
+        after_model_callback=log_model_response,
     )
 
 
@@ -131,7 +224,7 @@ def run_agent(agent: LlmAgent, prompt: str) -> str:
     )
     message = types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
     responses = []
-    
+
     try:
         for event in runner.run(user_id="user", session_id="session", new_message=message):
             if event.message and event.message.parts:
@@ -140,14 +233,18 @@ def run_agent(agent: LlmAgent, prompt: str) -> str:
                         responses.append(part.text)
     except Exception as err:
         return f"[Runner Error: {err}]"
-                    
+
     return "\n".join(responses).strip() or "No response from agent."
 
 
+# ============================================================================
+# 6. Interactive User Prompt Mode
+# ============================================================================
 if __name__ == "__main__":
     print("=" * 65)
     print(" Google ADK Weather Agent")
-    print(" Sample inputs available in: sample_inputs.txt")
+    print(f" Blocked keywords: {', '.join(BLOCKED_KEYWORDS)}")
+    print(f" Logs saved to: {LOG_FILE}")
     print(" Type 'exit' or 'quit' to end session.")
     print("=" * 65)
 
@@ -155,7 +252,11 @@ if __name__ == "__main__":
         print("[ERROR] GEMINI_API_KEY is not set in .env")
         sys.exit(1)
 
-    agent = create_weather_agent("gemini/gemini-3.7-flash")
+    # Initialize agent with validation & logging callbacks
+    agent = create_weather_agent(
+        model="gemini-3.7-flash",
+        blocked_keywords=["hack", "secret", "password", "confidential", "forbidden"],
+    )
 
     while True:
         try:

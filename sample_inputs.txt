@@ -1,0 +1,6 @@
+What is the weather in Chicago, IL?
+What is the weather in New York, NY?
+What is the weather in San Francisco, CA?
+What is the weather in Miami, FL?
+What is the weather in Seattle, WA?
+exit
