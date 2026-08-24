@@ -1,4 +1,4 @@
-"""Multi-Agent System using Google ADK.
+"""Multi-Agent System using Google ADK
 
 Architecture:
 - Root Agent (Coordinating Agent): Receives user requests and delegates to sub-agents.

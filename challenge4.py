@@ -1,4 +1,4 @@
-"""Agent Workflow System using Google ADK.
+"""Agent Workflow System using Google ADK
 
 Architecture:
 - Greeter Agent: Welcomes the user and introduces the agent workflow.
