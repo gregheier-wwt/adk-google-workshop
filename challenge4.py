@@ -1,9 +1,14 @@
-"""Multi-Agent System using Google ADK.
+"""Agent Workflow System using Google ADK.
 
 Architecture:
-- Root Agent (Coordinating Agent): Receives user requests and delegates to sub-agents.
-- Weather Agent (Sub-Agent): Queries Google Maps Geocoding API and National Weather Service API.
-- Search Agent (Sub-Agent): Uses ADK built-in Google Search tool for web queries and general knowledge.
+- Greeter Agent: Welcomes the user and introduces the agent workflow.
+- Weather Agent: Handles geocoding (Google Maps) and weather forecasts (NWS API).
+- Answer Team (SequentialAgent Workflow):
+    1. Search Agent: Finds data and facts to answer the question via Google Search.
+    2. Critique Agent: Reviews initial response and makes constructive suggestions.
+    3. Refine Agent: Rewrites the final response based on suggested improvements.
+- Root Agent: Coordinating agent that routes user requests to greeter, weather, or the answer team.
+- Callbacks: Logging to weather_agent.log & keyword validation blocking.
 """
 
 import logging
@@ -32,6 +37,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from google.adk.runners import Runner
@@ -40,12 +46,13 @@ from google.genai import types
 
 try:
     from google.adk.runners import _UNCACHED_TRANSFER_APPS
-    _UNCACHED_TRANSFER_APPS.add("multi_agent_system")
+    _UNCACHED_TRANSFER_APPS.add("workflow_app")
 except Exception:
     pass
 
 load_dotenv()
 os.environ.pop("GOOGLE_API_KEY", None)
+
 
 # ============================================================================
 # 1. Logging Setup (writes everything to weather_agent.log)
@@ -195,67 +202,114 @@ def geocode_address(address: str) -> Dict[str, Any]:
 
 
 # ============================================================================
-# 5. Multi-Agent System Setup (Weather Agent, Search Agent, Root Agent)
+# 5. Agent Workflow Setup (Greeter, Weather, Answer Team: Search -> Critique -> Refine)
 # ============================================================================
-def create_multi_agent_system(
+def create_agent_workflow(
     model: str = "gemini-3.7-flash",
     blocked_keywords: Optional[List[str]] = None,
 ) -> LlmAgent:
-    """Build and return a multi-agent system with a root agent and two specialized sub-agents.
+    """Build and return an agent workflow system using Google ADK.
 
-    - Sub-Agent 1: Weather Agent (handles geocoding and NWS weather forecasts)
-    - Sub-Agent 2: Search Agent (handles web search and general knowledge via Google Search tool)
-    - Root Agent: Coordinates and delegates tasks to the appropriate sub-agent.
+    Components:
+    1. Greeter Agent: Welcomes users and introduces the multi-agent system.
+    2. Weather Agent: Specialized sub-agent for US geocoding and NWS weather.
+    3. Answer Team (SequentialAgent):
+       a. Search Agent: Finds facts and data via Google Search tool.
+       b. Critique Agent: Reviews the initial response and makes constructive suggestions.
+       c. Refine Agent: Rewrites the response into a polished, complete final answer.
+    4. Root Agent: Coordinating agent that routes user queries to the appropriate agent.
     """
     global BLOCKED_KEYWORDS
     if blocked_keywords is not None:
         BLOCKED_KEYWORDS = blocked_keywords
 
-    # Shared server-side tool config for Google Search compatibility
     server_side_config = types.GenerateContentConfig(
         tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
     )
 
-    # 1. Weather Agent Sub-Agent
+    # 1. Greeter Agent
+    greeter_agent = LlmAgent(
+        name="greeter_agent",
+        model=model,
+        description="Warmly welcomes the user and explains the capabilities of the agent workflow system.",
+        instruction=(
+            "You are a friendly greeter assistant. Welcome the user, introduce the available services "
+            "(weather forecasts, web research with critique & refinement workflows), and invite questions."
+        ),
+        after_model_callback=log_model_response,
+    )
+
+    # 2. Weather Agent
     weather_agent = LlmAgent(
         name="weather_agent",
         model=model,
-        description="Specialist sub-agent for retrieving US weather forecasts, conditions, and geocoding locations.",
+        description="Specialist sub-agent for retrieving US weather forecasts and geocoding locations.",
         instruction=(
             "You are a weather specialist assistant. When asked about weather in any location, "
-            "first call geocode_address to get the geographic coordinates, then call get_weather "
-            "with those coordinates to retrieve the current forecast. Provide a clear, detailed summary."
+            "first call geocode_address to get the coordinates, then call get_weather "
+            "with those coordinates to retrieve the current forecast. Provide a clear summary."
         ),
         tools=[geocode_address, get_weather],
         after_model_callback=log_model_response,
     )
 
-    # 2. Search Agent Sub-Agent (uses ADK built-in Google Search tool)
+    # 3. Answer Team Components (Search -> Critique -> Refine)
     search_agent = LlmAgent(
         name="search_agent",
         model=model,
-        description="Specialist sub-agent for web searches, general knowledge, current events, facts, and news using Google Search.",
+        description="Finds data and factual information to answer the question using Google Search.",
         instruction=(
-            "You are a web search specialist assistant. Use the google_search tool to find accurate, "
-            "up-to-date information, facts, news, and answers to general questions."
+            "You are a search researcher. Use the google_search tool to find accurate and up-to-date "
+            "data and facts to answer the user's question clearly."
         ),
         tools=[GoogleSearchTool(bypass_multi_tools_limit=True)],
         generate_content_config=server_side_config,
         after_model_callback=log_model_response,
     )
 
-    # 3. Root Agent (Coordinating Agent) with Input Validation & Logging Callbacks
+    critique_agent = LlmAgent(
+        name="critique_agent",
+        model=model,
+        description="Critiques the initial search findings and makes suggestions on how to improve the response.",
+        instruction=(
+            "You are a critical reviewer. Review the search agent's findings in the conversation. "
+            "Evaluate accuracy, clarity, completeness, and structure. Make brief, constructive suggestions "
+            "on how to improve the response."
+        ),
+        after_model_callback=log_model_response,
+    )
+
+    refine_agent = LlmAgent(
+        name="refine_agent",
+        model=model,
+        description="Synthesizes and rewrites the final response based on the critique and suggestions.",
+        instruction=(
+            "You are a refinement specialist. Take the search findings and the critique suggestions, "
+            "and write a polished, comprehensive, and well-structured final answer for the user."
+        ),
+        after_model_callback=log_model_response,
+    )
+
+    # 4. Sequential Answer Team
+    answer_team = SequentialAgent(
+        name="answer_team",
+        description="A sequential workflow team that searches, critiques, and refines answers to questions.",
+        sub_agents=[search_agent, critique_agent, refine_agent],
+    )
+
+    # 5. Root Coordinating Agent
     root_agent = LlmAgent(
         name="root_agent",
         model=model,
-        description="Root coordinating agent that analyzes user requests and delegates them to specialized sub-agents.",
+        description="Root coordinating agent that routes user queries to greeter, weather, or answer team.",
         instruction=(
-            "You are the root coordinating assistant. Analyze the incoming user request and delegate it to the best sub-agent:\n"
-            "- If the query is about weather, temperatures, forecasts, or meteorological conditions, delegate to 'weather_agent'.\n"
-            "- If the query is about current events, news, general facts, web knowledge, or topics other than weather, delegate to 'search_agent'.\n"
+            "You are the root coordinating agent. Direct incoming user requests:\n"
+            "- If the user is greeting, saying hello, or asking what you can do, delegate to 'greeter_agent'.\n"
+            "- If the query is about weather, temperatures, or forecasts, delegate to 'weather_agent'.\n"
+            "- For all general questions, facts, news, research, or complex queries, delegate to 'answer_team'.\n"
             "Synthesize the response clearly and return the final answer to the user."
         ),
-        sub_agents=[weather_agent, search_agent],
+        sub_agents=[greeter_agent, weather_agent, answer_team],
         generate_content_config=server_side_config,
         before_model_callback=validate_and_log_user_prompt,
         after_model_callback=log_model_response,
@@ -265,12 +319,12 @@ def create_multi_agent_system(
 
 
 # ============================================================================
-# 3. Runner & Event Streaming Execution
+# 6. Runner & Event Streaming Execution
 # ============================================================================
 def run_agent(agent: LlmAgent, prompt: str, show_events: bool = True) -> str:
-    """Execute a prompt against the multi-agent system, displaying delegation events."""
+    """Execute a prompt against the agent workflow, displaying delegation and stage events."""
     runner = Runner(
-        app_name="multi_agent_system",
+        app_name="workflow_app",
         agent=agent,
         session_service=InMemorySessionService(),
         auto_create_session=True,
@@ -278,6 +332,7 @@ def run_agent(agent: LlmAgent, prompt: str, show_events: bool = True) -> str:
     message = types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
     responses = []
     active_agents = set()
+    final_output = []
 
     try:
         for event in runner.run(user_id="user", session_id="session", new_message=message):
@@ -289,23 +344,28 @@ def run_agent(agent: LlmAgent, prompt: str, show_events: bool = True) -> str:
                 for part in event.message.parts:
                     if getattr(part, "text", None):
                         responses.append(part.text)
+                        # Keep the latest response (e.g. from refine_agent or single sub-agent)
+                        final_output = [part.text]
     except Exception as err:
         return f"[Runner Error: {err}]"
 
     if show_events and active_agents:
-        delegated_to = ", ".join(sorted(active_agents))
-        print(f"  [Delegation Event] Delegated task to sub-agent: {delegated_to}")
+        delegated_to = " -> ".join(
+            [a for a in ["greeter_agent", "weather_agent", "search_agent", "critique_agent", "refine_agent"] if a in active_agents]
+        ) or ", ".join(sorted(active_agents))
+        print(f"  [Workflow Event] Stages executed: {delegated_to}")
 
-    return "\n".join(responses).strip() or "No response from agent."
+    # Return the refined final response or synthesized output
+    return (final_output[0] if final_output else "\n".join(responses)).strip() or "No response from agent."
 
 
 # ============================================================================
-# 4. Interactive & Demonstration Entry Point
+# 7. Interactive Entry Point
 # ============================================================================
 if __name__ == "__main__":
     print("=" * 65)
-    print(" Google ADK Multi-Agent System - Challenge 3")
-    print(" Root Agent coordinating: [weather_agent, search_agent]")
+    print(" Google ADK Agent Workflow - Challenge 4")
+    print(" Workflow: Root -> [Greeter, Weather, Answer Team (Search -> Critique -> Refine)]")
     print(f" Blocked keywords: {', '.join(BLOCKED_KEYWORDS)}")
     print(f" Logs saved to: {LOG_FILE}")
     print(" Type 'exit' or 'quit' to end session.")
@@ -315,8 +375,8 @@ if __name__ == "__main__":
         print("[ERROR] GEMINI_API_KEY is not set in .env")
         sys.exit(1)
 
-    # Initialize the complete Multi-Agent System
-    root_agent = create_multi_agent_system(model="gemini-3.7-flash")
+    # Initialize the complete Agent Workflow System
+    workflow_system = create_agent_workflow(model="gemini-3.7-flash")
 
     # Interactive REPL
     while True:
@@ -325,11 +385,11 @@ if __name__ == "__main__":
             if not user_input:
                 continue
             if user_input.lower() in ["exit", "quit", "q"]:
-                print("Exiting multi-agent system. Goodbye!")
+                print("Exiting agent workflow. Goodbye!")
                 break
 
-            response = run_agent(root_agent, user_input, show_events=True)
+            response = run_agent(workflow_system, user_input, show_events=True)
             print(f"\nAgent:\n{response}")
         except (KeyboardInterrupt, EOFError):
-            print("\nExiting multi-agent system. Goodbye!")
+            print("\nExiting agent workflow. Goodbye!")
             break
