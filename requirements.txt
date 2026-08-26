@@ -2,4 +2,5 @@ google-adk
 litellm
 requests
 python-dotenv
-google-cloud-aiplatform
+google-cloud-aiplatform[agent_engines]
+cloudpickle

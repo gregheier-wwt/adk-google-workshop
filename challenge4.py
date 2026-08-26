@@ -51,7 +51,9 @@ except Exception:
     pass
 
 load_dotenv()
-os.environ.pop("GOOGLE_API_KEY", None)
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+os.environ["GOOGLE_CLOUD_PROJECT"] = os.getenv("VERTEXAI_PROJECT", "qwiklabs-gcp-01-763299e638c8")
+os.environ["GOOGLE_CLOUD_LOCATION"] = os.getenv("VERTEXAI_LOCATION", "global")
 
 
 # ============================================================================
@@ -223,10 +225,6 @@ def create_agent_workflow(
     if blocked_keywords is not None:
         BLOCKED_KEYWORDS = blocked_keywords
 
-    server_side_config = types.GenerateContentConfig(
-        tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
-    )
-
     # 1. Greeter Agent
     greeter_agent = LlmAgent(
         name="greeter_agent",
@@ -262,8 +260,9 @@ def create_agent_workflow(
             "You are a search researcher. Use the google_search tool to find accurate and up-to-date "
             "data and facts to answer the user's question clearly."
         ),
-        tools=[GoogleSearchTool(bypass_multi_tools_limit=True)],
-        generate_content_config=server_side_config,
+        tools=[GoogleSearchTool()],
+        disallow_transfer_to_parent=True,
+        disallow_transfer_to_peers=True,
         after_model_callback=log_model_response,
     )
 
@@ -310,7 +309,6 @@ def create_agent_workflow(
             "Synthesize the response clearly and return the final answer to the user."
         ),
         sub_agents=[greeter_agent, weather_agent, answer_team],
-        generate_content_config=server_side_config,
         before_model_callback=validate_and_log_user_prompt,
         after_model_callback=log_model_response,
     )
@@ -365,18 +363,15 @@ def run_agent(agent: LlmAgent, prompt: str, show_events: bool = True) -> str:
 if __name__ == "__main__":
     print("=" * 65)
     print(" Google ADK Agent Workflow - Challenge 4")
+    print(f" Using Vertex AI Project: {os.getenv('GOOGLE_CLOUD_PROJECT')} (ADC Authenticated)")
     print(" Workflow: Root -> [Greeter, Weather, Answer Team (Search -> Critique -> Refine)]")
     print(f" Blocked keywords: {', '.join(BLOCKED_KEYWORDS)}")
     print(f" Logs saved to: {LOG_FILE}")
     print(" Type 'exit' or 'quit' to end session.")
     print("=" * 65)
 
-    if not os.getenv("GEMINI_API_KEY"):
-        print("[ERROR] GEMINI_API_KEY is not set in .env")
-        sys.exit(1)
-
     # Initialize the complete Agent Workflow System
-    workflow_system = create_agent_workflow(model="gemini-3.7-flash")
+    workflow_system = create_agent_workflow(model="gemini-2.5-flash")
 
     # Interactive REPL
     while True:

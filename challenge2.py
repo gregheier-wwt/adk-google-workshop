@@ -27,7 +27,9 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 load_dotenv()
-os.environ.pop("GOOGLE_API_KEY", None)
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+os.environ["GOOGLE_CLOUD_PROJECT"] = os.getenv("VERTEXAI_PROJECT", "qwiklabs-gcp-01-763299e638c8")
+os.environ["GOOGLE_CLOUD_LOCATION"] = os.getenv("VERTEXAI_LOCATION", "global")
 
 # ============================================================================
 # 1. Logging Setup (writes everything to weather_agent.log)
@@ -242,15 +244,13 @@ def run_agent(agent: LlmAgent, prompt: str) -> str:
 # ============================================================================
 if __name__ == "__main__":
     print("=" * 65)
-    print(" Google ADK Weather Agent")
+    print(" Google ADK Weather Agent - Challenge 2")
+    print(f" Using Vertex AI Project: {os.getenv('GOOGLE_CLOUD_PROJECT')} (ADC Authenticated)")
+    print(f" Region: {os.getenv('GOOGLE_CLOUD_LOCATION')}")
     print(f" Blocked keywords: {', '.join(BLOCKED_KEYWORDS)}")
     print(f" Logs saved to: {LOG_FILE}")
     print(" Type 'exit' or 'quit' to end session.")
     print("=" * 65)
-
-    if not os.getenv("GEMINI_API_KEY"):
-        print("[ERROR] GEMINI_API_KEY is not set in .env")
-        sys.exit(1)
 
     # Initialize agent with validation & logging callbacks
     agent = create_weather_agent(

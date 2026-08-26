@@ -45,7 +45,9 @@ except Exception:
     pass
 
 load_dotenv()
-os.environ.pop("GOOGLE_API_KEY", None)
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+os.environ["GOOGLE_CLOUD_PROJECT"] = os.getenv("VERTEXAI_PROJECT", "qwiklabs-gcp-01-763299e638c8")
+os.environ["GOOGLE_CLOUD_LOCATION"] = os.getenv("VERTEXAI_LOCATION", "global")
 
 # ============================================================================
 # 1. Logging Setup (writes everything to weather_agent.log)
@@ -211,11 +213,6 @@ def create_multi_agent_system(
     if blocked_keywords is not None:
         BLOCKED_KEYWORDS = blocked_keywords
 
-    # Shared server-side tool config for Google Search compatibility
-    server_side_config = types.GenerateContentConfig(
-        tool_config=types.ToolConfig(include_server_side_tool_invocations=True)
-    )
-
     # 1. Weather Agent Sub-Agent
     weather_agent = LlmAgent(
         name="weather_agent",
@@ -239,8 +236,9 @@ def create_multi_agent_system(
             "You are a web search specialist assistant. Use the google_search tool to find accurate, "
             "up-to-date information, facts, news, and answers to general questions."
         ),
-        tools=[GoogleSearchTool(bypass_multi_tools_limit=True)],
-        generate_content_config=server_side_config,
+        tools=[GoogleSearchTool()],
+        disallow_transfer_to_parent=True,
+        disallow_transfer_to_peers=True,
         after_model_callback=log_model_response,
     )
 
@@ -256,7 +254,6 @@ def create_multi_agent_system(
             "Synthesize the response clearly and return the final answer to the user."
         ),
         sub_agents=[weather_agent, search_agent],
-        generate_content_config=server_side_config,
         before_model_callback=validate_and_log_user_prompt,
         after_model_callback=log_model_response,
     )
@@ -305,15 +302,12 @@ def run_agent(agent: LlmAgent, prompt: str, show_events: bool = True) -> str:
 if __name__ == "__main__":
     print("=" * 65)
     print(" Google ADK Multi-Agent System - Challenge 3")
+    print(f" Using Vertex AI Project: {os.getenv('GOOGLE_CLOUD_PROJECT')} (ADC Authenticated)")
     print(" Root Agent coordinating: [weather_agent, search_agent]")
     print(f" Blocked keywords: {', '.join(BLOCKED_KEYWORDS)}")
     print(f" Logs saved to: {LOG_FILE}")
     print(" Type 'exit' or 'quit' to end session.")
     print("=" * 65)
-
-    if not os.getenv("GEMINI_API_KEY"):
-        print("[ERROR] GEMINI_API_KEY is not set in .env")
-        sys.exit(1)
 
     # Initialize the complete Multi-Agent System
     root_agent = create_multi_agent_system(model="gemini-3.7-flash")

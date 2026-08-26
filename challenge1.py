@@ -26,8 +26,9 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 load_dotenv()
-os.environ.pop("GOOGLE_API_KEY", None)
-os.environ["ADK_SUPPRESS_GEMINI_LITELLM_WARNINGS"] = "true"
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
+os.environ["GOOGLE_CLOUD_PROJECT"] = os.getenv("VERTEXAI_PROJECT", "qwiklabs-gcp-01-763299e638c8")
+os.environ["GOOGLE_CLOUD_LOCATION"] = os.getenv("VERTEXAI_LOCATION", "global")
 
 
 def get_weather(latitude: float, longitude: float) -> Dict[str, Any]:
@@ -99,19 +100,18 @@ def geocode_address(address: str) -> Dict[str, Any]:
         return {"error": f"Geocoding request exception: {exc}"}
 
 
-def create_weather_agent(model: str = "gemini/gemini-3.7-flash") -> LlmAgent:
-    """Create an ADK LlmAgent supporting Gemini via LiteLLM.
+def create_weather_agent(model: str = "gemini-3.7-flash") -> LlmAgent:
+    """Create an ADK LlmAgent supporting Gemini via Vertex AI and ADC.
 
     Args:
-        model: LiteLLM model identifier (e.g., 'gemini/gemini-3.7-flash').
+        model: Model identifier (e.g., 'gemini-3.7-flash').
 
     Returns:
         Configured LlmAgent instance.
     """
-    api_key = os.getenv("GEMINI_API_KEY")
     return LlmAgent(
         name="weather_agent",
-        model=LiteLlm(model=model, api_key=api_key),
+        model=model,
         instruction=(
             "You are a weather assistant. When asked about weather in a US location, "
             "first call geocode_address to get latitude and longitude, then call "
@@ -146,16 +146,14 @@ def run_agent(agent: LlmAgent, prompt: str) -> str:
 
 if __name__ == "__main__":
     print("=" * 65)
-    print(" Google ADK Weather Agent")
+    print(" Google ADK Weather Agent - Challenge 1")
+    print(f" Using Vertex AI Project: {os.getenv('GOOGLE_CLOUD_PROJECT')} (ADC Authenticated)")
+    print(f" Region: {os.getenv('GOOGLE_CLOUD_LOCATION')}")
     print(" Sample inputs available in: sample_inputs.txt")
     print(" Type 'exit' or 'quit' to end session.")
     print("=" * 65)
 
-    if not os.getenv("GEMINI_API_KEY"):
-        print("[ERROR] GEMINI_API_KEY is not set in .env")
-        sys.exit(1)
-
-    agent = create_weather_agent("gemini/gemini-3.7-flash")
+    agent = create_weather_agent("gemini-3.7-flash")
 
     while True:
         try:
